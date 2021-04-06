@@ -1,0 +1,936 @@
+---
+title: "Untitled"
+author: "SUN_Maoping"
+date: "4/5/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+## Explore dataset
+```{r}
+library(ROSE)
+library(tidyverse) 
+library(modelr) 
+library(broom)
+library(caret)
+```
+
+```{r}
+data = read.csv('HR_comma_sep.csv')
+head(data)
+```
+
+
+```{r}
+# number of observations and variables
+dim(data)
+```
+
+
+```{r}
+# statistics of variables
+summary(data)
+```
+
+
+### check structure of target variable
+```{r}
+# Turnover rate of full data set
+sum(data$left)/length(data$left)
+```
+
+```{r}
+data.frame(table(data$left)) %>%
+  ggplot(aes(x=Var1,y=Freq)) +
+  geom_bar(stat = 'identity',
+           width = 0.4,
+           fill="steelblue") +
+  geom_text(aes(label=Freq),
+            vjust=2) +
+  labs(title = "Distribution of target variable 'left'",
+       x = "Left",
+       y = "Count")
+```
+
+**The target variable is highly imbalanced.**<br>
+**We need to sample the dataset before modeling to decrease the impact of imbalanced target variable on accuracy rate.**<br>
+
+
+### transform Department into dummy variables
+```{r}
+data2 = data
+#Creating dummy variables
+dummy <- dummyVars(" ~ .", data = data2, fullRank = TRUE)
+data2 <- data.frame(predict(dummy, newdata = data2))
+str(data2)
+```
+
+## Data Visualization
+
+### Correlation Matrix
+```{r}
+library(corrplot)
+
+corrplot.mixed(cor(data2[,-c(9:17)]), # deselect 9 different departments
+               lower = "pie", upper = "number", 
+               diag = "u",
+               number.cex = 0.8,#数字大小
+               tl.pos ="lt",tl.cex=0.8,tl.col="black",
+               title = "") 
+```
+**Satisfaction level is the variable most correlated with 'left'.**<br>
+
+
+### Satisfaction Level vs Turnover
+```{r}
+data %>% 
+  group_by(left) %>% 
+  summarise(satisfaction_level = mean(satisfaction_level)) %>%
+  ggplot(aes(x=left,y=satisfaction_level,fill=factor(left))) +
+  geom_bar(stat="identity",width = 0.3) +
+  scale_x_continuous(breaks=c(0,1)) +
+  labs(title = "Satisfaction Level vs Turnover",
+       y = "Satisfaction Level")
+```
+**Without surprise, employees who left have lower satisfaction level.**<br>
+
+
+### Salary vs Turnover
+```{r}
+data.frame(prop.table(table(data$salary,data$left),1)) %>%
+  rename(salary=Var1,left=Var2,probability=Freq) %>%
+  ggplot(aes(x=factor(salary,
+                      order= TRUE,
+                      levels=c("low","medium","high")),
+             y=probability,fill=left)) +
+  geom_bar(position="dodge",stat='identity') +
+  labs(title = "Salary vs Turnover",
+       x = "Salary",
+       y = "Turnover Rate")
+```
+**The lower the salary, the larger the turnover rate.**<br>
+
+
+# Project Count vs Turnover
+```{r}
+data.frame(prop.table(table(data$number_project,data$left),1)) %>%
+  rename(project_count=Var1,left=Var2,probability=Freq) %>% 
+  filter(left==1) %>% 
+  ggplot(aes(x=reorder(project_count,probability),y=probability)) + 
+  geom_bar(stat='identity',fill='plum') + 
+  labs(title = "Project Count vs Turnover",
+       x = "Project count",
+       y = "Turnover rate") +
+    coord_flip()
+```
+**Employees with medium number of projects are less likely to turnover.However,too many or less projects both mean higher turnover rate.**<br>
+
+
+### Evaluation vs Turnover
+```{r}
+data.frame(prop.table(table(data$last_evaluation,data$left),1)) %>%
+  rename(last_evaluation=Var1,left=Var2,probability=Freq) %>% 
+  filter(left==1) %>% 
+  ggplot(aes(x=last_evaluation,y=probability)) + 
+  geom_line(aes(group=1)) +
+  scale_x_discrete(breaks = seq(0.3,1,0.1)) +
+  labs(title = "Evaluation vs Turnover",
+       x = "Last evaluation",
+       y = "Turnover rate")
+```
+
+```{r}
+ggplot(data = data) +
+  geom_density(aes(x=last_evaluation,fill=factor(left),alpha=0.5)) +
+  labs(title = "Evaluation vs Turnover",
+       x = "Last evaluation",
+       y = "Density")
+```
+
+**Employees with high or low evaluation are more likely to leave.Those with medium evaluation are more stable.**<br>
+**Employees with high evaluation may have more opportunity.**<br>
+**Employers may be unsatisfied with employees with low evaluation and thus fire them.**<br>
+
+### Turnover vs Average Monthly Hours
+```{r}
+ggplot(data = data) +
+  geom_density(aes(x=average_montly_hours,fill=factor(left),alpha=0.5)) +
+  labs(title = "Average Monthly Hours vs Turnover",
+       x = "Average Monthly Hours",
+       y = "Density")
+```
+
+**Average Monthly Hours and Last Evaluation have similar distribution.Working either too long or too short will lead to high turnover rate.**<br>
+
+
+### Time spent in compnay vs Turnover
+```{r}
+data.frame(prop.table(table(data$time_spend_company,data$left),1)) %>%
+  rename(time_spend_company=Var1,left=Var2,probability=Freq) %>% 
+  filter(left==1) %>% 
+  ggplot(aes(x=reorder(time_spend_company,probability),y=probability)) + 
+  geom_bar(stat = 'identity') +
+  labs(title = "Time Spent in Company vs Turnover",
+       x = "Year spent in Company",
+       y = "Turnover rate") +
+  coord_flip()
+```
+
+**For those stay in the company longer than 7 years, the turnover rate is zero. Nobody leaves.**<br>
+
+
+### Promotion vs Turnover
+```{r}
+print("Number of people got promoted in last 5 years:")
+table(data$promotion_last_5years)
+```
+
+```{r}
+data.frame(prop.table(table(data$promotion_last_5years,data$left),1)) %>%
+  rename(promotion=Var1,left=Var2,probability=Freq) %>%
+  ggplot(aes(x=promotion,y=probability,fill=left)) +
+  geom_bar(position="dodge",stat='identity',width = 0.6) +
+  labs(title = "Promotion vs Turnover",
+       x = "Promotion in last 5 years",
+       y = "Turnover rate")
+```
+
+**The majority of employees didn't get promoted in last 5 years.**<br>
+**Employees got promoted are less likely to leave.**<br>
+
+
+### Work accident vs Turnover
+```{r}
+print("Number of people has work accident:")
+table(data$Work_accident)
+```
+
+```{r}
+data.frame(prop.table(table(data$Work_accident,data$left),1)) %>%
+  rename(Work_accident=Var1,left=Var2,probability=Freq) %>%
+  ggplot(aes(x=Work_accident,y=probability,fill=left)) +
+  geom_bar(position="dodge",stat='identity',width = 0.6) +
+  labs(title = "Work Accident vs Turnover",
+       x = "Work accident",
+       y = "Turnover rate")
+```
+
+**The majority of employees doesn't have work accident.**<br>
+**There is an counterintuitive fact that employees with work accident has lower turnover rate.**<br>
+**Explanation may be that employees stay longer in the company have larger probability to make mistake.**<br>
+
+
+### Department vs Turnover
+```{r}
+data.frame(prop.table(table(data$sales,data$left),1)) %>% 
+  rename(department=Var1,left=Var2,probability=Freq) %>% 
+  filter(left==1) %>% 
+  ggplot(aes(x=reorder(department,probability),y=probability)) + 
+  geom_bar(stat='identity',fill="steelblue") + 
+  labs(title = "Department vs Turnover",
+       x = "Department",
+       y = "Turnover rate") +
+    coord_flip()
+```
+**Departments related to management and research has lower turnover rate.**<br>
+**Functional departments, such as HR and accounting, have the highest turnover rate.**<br>
+
+
+<br>
+<br>
+
+
+## Data Structure and Transformation
+**Because the original dataa structure is imbalanced, we will build models based on datasets with different sampling methods to balance the data structure.**
+
+```{r}
+original_set = data.frame(method = "original-set", size = c(11428,3571),target = c("stay","left"))
+over_sampling = data.frame(method = "oversampling-set", size = c(11428,11428), target = c("stay","left"))
+under_sampling = data.frame(method = "undersampling-set", size = c(3571,3571), target = c("stay","left"))
+both_sampling = data.frame(method = "bothsampling-set", size = c(7524,7475), target = c("stay","left"))
+
+rbind(original_set,over_sampling,under_sampling,both_sampling) %>%
+  ggplot(aes(x=factor(method,order=TRUE,
+                      levels=c("oversampling-set",
+                               "undersampling-set",
+                               "bothsampling-set",
+                               "original-set")),
+             y=size,
+             fill=factor(target))) +
+  geom_bar(stat='identity', width=0.6) +
+  geom_text(aes(label=size),position = position_stack(vjust=0.5)) +
+  labs(title = "Data Structure and Transformation",
+       x = "Transformation method",
+       y = "Number of observations") +
+  theme(legend.title = element_blank()) +
+  coord_flip()
+```
+
+**Based on dataset above, we build two kinds of models:**<br>
+logistic regression (3 models) <br>
+decision tree models (9 models) <br>
+
+
+
+## Logistic regression
+
+### transform Department into dummy variables
+```{r}
+data2 = data
+#Creating dummy variables
+dummy <- dummyVars(" ~ .", data = data2, fullRank = TRUE)
+data2 <- data.frame(predict(dummy, newdata = data2))
+str(data2)
+```
+
+
+### Split the dataset into training and testing
+```{r}
+set.seed(1)
+a1 = seq(1,nrow(data2),1)
+
+ind = sample(a1, floor(nrow(data2)*0.8), replace = FALSE)
+train1 = data2[ind,]
+test1 = data2[-ind,]
+```
+
+
+### Logistic regression without sampling
+```{r}
+#####   Estimation   ######
+m1 = glm(left~., data=train1, family = binomial(link='logit'))
+summary(m1)
+```
+
+
+```{r}
+###  Prediction / Evaluation   ###
+m1.logodd = predict(m1, newdata=test1[,-7], type="link")
+y_pred = ifelse(m1.logodd>0.5,1,0)
+m1.class = as.numeric(m1.logodd>0) # Convert z-value into class (0,1)
+m1.right = sum(as.numeric(test1$left == m1.class))
+m1.acc = mean(as.numeric(test1$left == m1.class))
+```
+
+
+
+```{r}
+### Confusion martix
+cm1 = table(test1[, 7], y_pred)
+cm1
+m1.acc = (cm1[1,1] + cm1[2,2]) / 
+         (cm1[1,1] + cm1[2,2] + cm1[1,2] + cm1[2,1])
+m1.acc
+```
+
+
+```{r}
+table(data2$left)
+```
+
+
+
+### Logistic regression with over sampling
+```{r}
+# Over sampling dataset on target variable "left"
+set.seed(1)
+data_balanced_over <- ovun.sample(left ~ ., 
+                                  data = data2, 
+                                  method = "over",
+                                  N = 11428*2)$data
+table(data_balanced_over$left)
+```
+
+
+```{r}
+## Split oversampled dataset into training and testing
+a2 = seq(1,nrow(data_balanced_over),1)
+
+ind2 = sample(a2, floor(nrow(data_balanced_over)*0.8), replace = FALSE) 
+# randomly select 80% of total records from original dataset without replacement
+train2 = data_balanced_over[ind2,]
+test2 = data_balanced_over[-ind2,]
+```
+
+
+```{r}
+#####   Estimation   ######
+m2 = glm(left~., data=train2, family = binomial(link='logit'))
+summary(m2)
+```
+
+
+```{r}
+###  Prediction / Evaluation   ###
+m2.logodd = predict(m2, newdata=test2[,-7], type="link")
+y_pred2 = ifelse(m2.logodd>0.5,1,0)
+m2.class = as.numeric(m2.logodd>0) # Convert z-value into class (0,1)
+m2.right = sum(as.numeric(test2$left == m2.class))
+m2.acc = mean(as.numeric(test2$left == m2.class))
+cm2 = table(test2$left, y_pred2)
+cm2
+m2.acc = (cm2[1,1] + cm2[2,2]) / 
+         (cm2[1,1] + cm2[2,2] + cm2[1,2] + cm2[2,1])
+m2.acc
+```
+
+**The accuracy rate, 73.9%, of 2nd model (regression with over sampling) is smaller than previous model (regression without sampling).**
+
+
+### Logistic regression with under sampling
+```{r}
+# Under sampling dataset on target variable "left"
+data_balanced_under <- ovun.sample(left ~ ., 
+                                   data = data2, 
+                                   method = "under",
+                                   N = 3571*2)$data
+table(data_balanced_under$left)
+```
+
+
+```{r}
+## Split the dataset into training and testing
+a3 = seq(1,nrow(data_balanced_under),1)
+
+ind3 = sample(a3, floor(nrow(data_balanced_under)*0.8), replace = FALSE)
+train3 = data_balanced_under[ind3,]
+test3 = data_balanced_under[-ind3,]
+
+#####   Estimation   ######
+m3 = glm(left~., data=train3, family = binomial(link='logit'))
+summary(m3)
+```
+
+
+```{r}
+###  Prediction / Evaluation   ###
+m3.logodd = predict(m3, newdata=test3[,-7], type="link")
+y_pred3 = ifelse(m3.logodd>0.5,1,0)
+m3.class = as.numeric(m3.logodd>0) # Convert z-value into class (0,1)
+m3.right = sum(as.numeric(test3$left == m3.class))
+m3.acc = mean(as.numeric(test3$left == m3.class))
+cm3 = table(test3[, 7], y_pred3)
+cm3
+m3.acc = (cm3[1,1] + cm3[2,2]) / 
+         (cm3[1,1] + cm3[2,2] + cm3[1,2] + cm3[2,1])
+m3.acc
+```
+
+**The accuracy rate, 72.9%, of 3nd model (regression with under sampling) is smaller than previous 2 models.**
+
+
+### Logistic regression with both method (over&under sampling)
+```{r}
+# over sampling minority(1-left) and under sampling majority(0-left)
+data_balanced_both <- ovun.sample(left ~ ., 
+                                  data = data2, 
+                                  method = "both", 
+                                  p=0.5, 
+                                  N = 14999)$data
+table(data_balanced_both$left)
+```
+
+
+```{r}
+## Split the dataset into training and testing
+a4 = seq(1,nrow(data_balanced_both),1)
+
+ind4 = sample(a4, floor(nrow(data_balanced_both)*0.8), replace = FALSE)
+train4 = data_balanced_both[ind4,]
+test4 = data_balanced_both[-ind4,]
+
+
+#####   Estimation   ######
+m4 = glm(left~., data=train4, family = binomial(link='logit'))
+summary(m4)
+```
+
+```{r}
+###  Prediction / Evaluation   ###
+m4.logodd = predict(m4, newdata=test4[,-7], type="link")
+y_pred4 = ifelse(m4.logodd>0.5,1,0)
+m4.class = as.numeric(m4.logodd>0) # Convert z-value into class (0,1)
+m4.right = sum(as.numeric(test4$left == m4.class))
+m4.acc = mean(as.numeric(test4$left == m4.class))
+cm4 = table(test4$left, y_pred4)
+cm4
+m4.acc = (cm4[1,1] + cm4[2,2]) / 
+         (cm4[1,1] + cm4[2,2] + cm4[1,2] + cm4[2,1])
+m4.acc
+```
+
+
+```{r}
+# accuracy of 4 regression models
+data.frame(
+  model = c("original dataset","over sampling","under sampling","over&under sampling"),
+  accuracy = c(m1.acc,m2.acc,m3.acc,m4.acc)
+)
+```
+
+**Among 4 regression models, the one based on original dataset, imbalanced dataset, produce the highest accuracy rate.**<br>
+**It further verifies that accuracy rate based imbalanced dataset is unreliable.**<br>
+
+<br>
+<br>
+
+
+## Decision Tree
+```{r}
+library(rpart)
+library(rpart.plot)
+```
+
+
+
+### Decision tree with over sampling
+
+
+#### Building Decision Tree Base
+```{r}
+decision_tree_over_base <- rpart(left ~., 
+                                 data = train2, 
+                                 method = 'class', 
+                                 control = rpart.control(cp=0))
+```
+
+
+```{r}
+plotcp(decision_tree_over_base)
+```
+
+```{r}
+rpart.plot(decision_tree_over_base,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+
+```{r}
+#variable importance
+decision_tree_over_base$variable.importance
+```
+
+
+#### Building Decision Tree Prepurning
+```{r}
+decision_tree_over_pre <- rpart(left ~., 
+                                data = train2, 
+                                method = 'class',
+                                control = rpart.control(cp=0,
+                                                        maxdepth = 28,
+                                                        minsplit = 50))
+
+plotcp(decision_tree_over_pre)
+```
+
+
+```{r}
+rpart.plot(decision_tree_over_pre,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+```{r}
+# variable importance
+decision_tree_over_pre$variable.importance
+```
+
+
+#### Building Decision Tree Postpurning
+```{r}
+decision_tree_over_post <- rpart(left ~., 
+                                 data = train2, 
+                                 method = 'class',
+                                 control = rpart.control(cp=0.00098641,
+                                                         maxdepth = 28,
+                                                         minsplit = 50))
+plotcp(decision_tree_over_post)
+```
+
+
+```{r}
+rpart.plot(decision_tree_over_post,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+
+```{r}
+#variable importance
+decision_tree_over_post$variable.importance 
+```
+
+
+### Decision tree with under sampling
+
+
+#### Building Decision Tree Base
+```{r}
+decision_tree_under_base <- rpart(left ~., 
+                                  data = train3, 
+                                  method = 'class', 
+                                  control = rpart.control(cp=0))
+
+plotcp(decision_tree_under_base)
+```
+
+
+```{r}
+rpart.plot(decision_tree_under_base,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+
+```{r}
+# variable importance
+decision_tree_under_base$variable.importance
+```
+
+
+#Building Decision Tree Prepurning
+```{r}
+decision_tree_under_pre <- rpart(left ~., 
+                                 data = train3, 
+                                 method = 'class',
+                                 control = rpart.control(cp=0,
+                                                         maxdepth = 12,
+                                                         minsplit = 50))
+plotcp(decision_tree_under_pre)
+```
+
+
+```{r}
+rpart.plot(decision_tree_under_pre,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+
+```{r}
+# variable importance
+decision_tree_under_pre$variable.importance
+```
+
+
+#### Building Decision Tree Postpurning
+```{r}
+decision_tree_under_post <- rpart(left ~., 
+                                  data = train3, 
+                                  method = 'class',
+                                  control = rpart.control(cp=0.0024536,
+                                                          maxdepth = 12,
+                                                          minsplit = 50))
+plotcp(decision_tree_under_post)
+```
+
+```{r}
+rpart.plot(decision_tree_under_post,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+
+```{r}
+# variable importance
+decision_tree_under_post$variable.importance 
+```
+
+
+### Decision Tree with both method (over&under sampling)
+
+#### Building Decision Tree Base
+```{r}
+decision_tree_both_base <- rpart(left ~., 
+                                 data = train4, 
+                                 method = 'class', 
+                                 control = rpart.control(cp=0))
+plotcp(decision_tree_both_base)
+```
+
+
+```{r}
+rpart.plot(decision_tree_both_base,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+
+```{r}
+# variable importance
+decision_tree_both_base$variable.importance 
+```
+
+
+#### Building Decision Tree Prepurning
+```{r}
+decision_tree_both_pre <- rpart(left ~., 
+                                data = train4, 
+                                method = 'class',
+                                control = rpart.control(cp=0,
+                                                        maxdepth = 25,
+                                                        minsplit = 50))
+plotcp(decision_tree_both_pre)
+```
+
+
+```{r}
+rpart.plot(decision_tree_both_pre,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+```{r}
+#variable importance
+decision_tree_both_pre$variable.importance 
+```
+
+
+#### Building Decision Tree Postpurning
+```{r}
+decision_tree_both_post <- rpart(left ~., data = train4, method = 'class',
+                                 control = rpart.control(cp=0.00134161,maxdepth = 25,
+                                                         minsplit = 50))
+plotcp(decision_tree_both_post)
+```
+
+
+```{r}
+rpart.plot(decision_tree_both_post,
+           type=0, extra=104, under=FALSE, clip.right.labs=TRUE,
+           fallen.leaves=FALSE, 
+           digits=2, varlen=-8, faclen=3,
+           cex=NULL, tweak=1.2,
+           compress=TRUE,
+           snip=FALSE)
+```
+
+
+```{r}
+# variable importance
+decision_tree_both_post$variable.importance 
+```
+
+
+
+```{r}
+plotcp(decision_tree_over_base)
+printcp(decision_tree_over_base)
+plotcp(decision_tree_under_base)
+printcp(decision_tree_under_base)
+plotcp(decision_tree_both_base)
+printcp(decision_tree_both_base)
+```
+
+## Evaluation
+```{r}
+library(ROCR)
+```
+
+### ROC of Logistic Regression
+```{r}
+prediction_over = prediction(m2.logodd, test2$left)
+performace_over = performance(prediction_over, "tpr", "fpr")
+prediction_under = prediction(m3.logodd, test3$left)
+performace_under = performance(prediction_under, "tpr", "fpr")
+prediction_both = prediction(m4.logodd, test4$left)
+performace_both = performance(prediction_both, "tpr", "fpr")
+
+
+plot.new()
+plot(performace_over, col= "deeppink")
+plot(performace_under, add = TRUE, col= "cyan3")
+plot(performace_both, add = TRUE, col= "blueviolet")
+
+abline(0,1, col = "black")
+title("ROC curves of Logistic")
+legend(0.7, 0.5 ,c("Over", "Under", "Both"), 
+       lty = c(1,1,1), 
+       lwd = c(0.5,0.5,0.5),
+       col = c("deeppink", "cyan3", "blueviolet"),
+       ncol=1, cex=0.6, y.intersp=0.5)
+```
+
+### ROC of Decision Tree
+```{r}
+library(pROC)
+
+par(pty="s") 
+#par(mar=c(5.1, 4.1, 4.1, 8.1), xpd=TRUE)
+
+OverBaseROC <- roc(test2$left ~ test2$pred_over_base,
+                   plot=TRUE,
+                   #print.auc=TRUE,
+                   col="darkgreen",
+                   lwd =1,
+                   legacy.axes=TRUE,
+                   main="ROC Curves")
+
+OverPreROC <- roc(test2$left ~ test2$pred_over_pre,
+                  plot=TRUE,
+                  #print.auc=TRUE,
+                  col="red",lwd =1,
+                  print.auc.y=0.9,
+                  legacy.axes=TRUE,
+                  add = TRUE)
+
+OverPostROC <- roc(test2$left ~ test2$pred_over_post,
+                   plot=TRUE,
+                   #print.auc=TRUE,
+                   col="blue",
+                   lwd =1,
+                   print.auc.y=0.85,
+                   legacy.axes=TRUE,
+                   add = TRUE)
+
+UnderBaseROC <- roc(test3$left ~ test3$pred_under_base,
+                    plot=TRUE,
+                    #print.auc=TRUE,
+                    col="blueviolet",
+                    lwd =1,
+                    print.auc.y=0.8,
+                    legacy.axes=TRUE,
+                    add = TRUE)
+
+UnderPreROC <- roc(test3$left ~ test3$pred_under_pre,
+                   plot=TRUE,
+                   #print.auc=TRUE,
+                   col="deeppink",
+                   lwd =1,
+                   print.auc.y=0.75,
+                   legacy.axes=TRUE,
+                   add = TRUE)
+
+UnderPostROC <- roc(test3$left ~ test3$pred_under_post,
+                    plot=TRUE,
+                    #print.auc=TRUE,
+                    col="plum",
+                    lwd =1,
+                    print.auc.y=0.7,
+                    legacy.axes=TRUE,
+                    add = TRUE)
+#BothBaseROC <- roc(test4$left ~ test4$pred_both_base,plot=TRUE,print.auc=TRUE,col="brown",lwd =4,print.auc.y=0.65,legacy.axes=TRUE,add = TRUE)
+BothPreROC <- roc(test4$left ~ test4$pred_both_pre,
+                  plot=TRUE,
+                  #print.auc=TRUE,
+                  col="orange",
+                  lwd =1,
+                  print.auc.y=0.6,
+                  legacy.axes=TRUE,
+                  add = TRUE)
+
+BothPostROC <- roc(test4$left ~ test4$pred_both_post,
+                   plot=TRUE,
+                   #print.auc=TRUE,
+                   col="cyan3",
+                   lwd =1,
+                   print.auc.y=0.5,
+                   legacy.axes=TRUE,
+                   add = TRUE)
+
+legend("bottomright",c("over base", "over pre","over post",
+                   "under base", "under pre", "under post",
+                   "both base", "both pre", "both post"), 
+       lty = c(1,1,1), 
+       lwd = c(0.5,0.5,0.5),
+       col = c("deeppink", "cyan3", "blueviolet","red",
+               "yellow","brown","plum","orange","green"),
+       ncol=1, cex=1, y.intersp=0.5)
+```
+
+#### AUC of over sampling decision tree
+```{r}
+print(paste0("AUC of OverBaseTree: ",round(OverBaseROC$auc,3)))
+print(paste0("AUC of OverPreTree: ",round(OverPreROC$auc,3)))
+print(paste0("AUC of OverPosTree: ",round(OverPostROC$auc,3)))
+```
+**For oversampling,the largest AUC comes from OverBaseTree.**
+
+#### AUC of under sampling decision tree
+```{r}
+print(paste0("AUC of UnderBaseTree: ",round(UnderBaseROC$auc,3)))
+print(paste0("AUC of UnderPreTree: ",round(UnderPreROC$auc,3)))
+print(paste0("AUC of UnderPostTree: ",round(UnderPostROC$auc,3)))
+```
+**For undersampling,the largest AUC comes from UnderPreTree.**
+
+#### AUC of over&under sampling decision tree
+```{r}
+print(paste0("AUC of BothBaseTree: ",round(BothBaseROC$auc,3)))
+print(paste0("AUC of BothPreTree: ",round(BothPreROC$auc,3)))
+print(paste0("AUC of BothPostTree: ",round(BothPostROC$auc,3)))
+```
+**For both(under&over) sampling,the largest AUC comes from BothBaseTree.**<br>
+
+
+**Among 9 tree models, oversampling base tree has the best performance with the largest AUC 0.993.**<br>
+
+
+#### Variable importance
+```{r}
+library(Boruta)
+data$left<-as.factor(data$left)
+boruta.train <- Boruta(left~., data = data, doTrace = 2)
+
+print(boruta.train)
+plot(boruta.train, xlab = "", xaxt = "n")
+
+lz<-lapply(1:ncol(boruta.train$ImpHistory),function(i)
+  boruta.train$ImpHistory[is.finite(boruta.train$ImpHistory[,i]),i])
+names(lz) <- colnames(boruta.train$ImpHistory)
+Labels <- sort(sapply(lz,median))
+axis(side = 1,las=2,labels = names(Labels),
+     at = 1:ncol(boruta.train$ImpHistory), cex.axis = 0.7)
+```
+**Satisfaction level is the most informative variable in prediction.**
+**Number of project,last evaluation,time spend in company,and averaage montly hours come next in order.**
+
+
+<br>
+<br>
+
+
+## Conclusion
+**Having lower autonomy for decisions might lead to low job satisfaction which contributes to employees' willingness to stay in the organization.**<br>
+**Prioritise employee well-being.Motivating employees towards achieving a fitness milestone.Encouraging them to disconnect when they are feeling the early signs of burnout.**<br>
+**Long-tenured employees are reluctant to leave because of the accumulation of organizational investment.**<br>
+**Give reasonable salary base on employees' performance.**<br>
+
